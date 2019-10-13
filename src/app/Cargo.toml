@@ -1,0 +1,27 @@
+[package]
+name = "app"
+version = "0.1.0"
+authors = ["kezenator <github@kezenator.com>"]
+edition = "2018"
+
+[dependencies.squad]
+path = "../squad"
+
+[dependencies.squad_codegen]
+path = "../squad_codegen"
+
+[dependencies.tokio]
+version = "=0.2.0-alpha.6"
+default-features = true
+features = ["rt-full"]
+
+[dependencies.tracing]
+version="0.1.9"
+
+[dependencies.tracing-core]
+version="0.1.6"
+
+[dependencies.tracing-futures]
+version="0.1.0"
+default-features = true
+features = ["std-future", "tokio-alpha"]
