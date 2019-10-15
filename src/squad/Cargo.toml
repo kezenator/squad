@@ -4,5 +4,8 @@ version = "0.1.0"
 authors = ["kezenator <github@kezenator.com>"]
 edition = "2018"
 
+[dependencies.squad_codegen]
+path = "../squad_codegen"
+
 [dependencies.tracing-core]
 version="0.1.6"

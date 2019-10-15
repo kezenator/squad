@@ -1,14 +1,22 @@
 use proc_macro2::*;
 use crate::error::*;
 use syn::parse;
-use quote::quote;
+use quote::*;
+use crate::method_tools;
+
+pub fn process_trait(input: proc_macro::TokenStream) -> Result<proc_macro2::TokenStream, syn::Error>
+{
+    let mut item : syn::ItemTrait = syn::parse(input)?;
+
+    check_trait(&item)?;
+
+    let extras = modify(&mut item)?;
+
+    return Ok(quote!(#item #extras));
+}
 
 pub fn modify(item: &mut syn::ItemTrait) -> Result<TokenStream, syn::Error>
 {
-    // Check that it all looks OK before we start making changes
-
-    check_trait(item)?;
-
     // Add the Sync and Send super traits
 
     item.supertraits.push(parse(quote!(::std::marker::Sync).into())?);
@@ -22,43 +30,7 @@ pub fn modify(item: &mut syn::ItemTrait) -> Result<TokenStream, syn::Error>
         {
             syn::TraitItem::Method(method) =>
             {
-                if method.sig.asyncness.is_some()
-                {
-                    // If it's marked as async, we need to convert
-                    // it to non-async, by:
-                    // 1) Removing the async keywoard
-                    // 2) Adding a lifetime generic
-                    // 3) Adding the lifetime to the receiver
-                    // 4) Changing the return type to a future
-
-                    method.sig.asyncness = None;
-
-                    method.sig.generics.params.push(parse(quote!('s).into())?);
-
-                    for param in method.sig.inputs.iter_mut()
-                    {
-                        if let syn::FnArg::Receiver(receiver) = param
-                        {
-                            receiver.reference = Some(
-                                (parse(quote!(&).into())?,
-                                Some(parse(quote!('s).into())?)));
-                        }
-                    }
-
-                    let output : syn::ReturnType = match &method.sig.output
-                    {
-                        syn::ReturnType::Default =>
-                        {
-                            parse(quote!(-> ::std::pin::Pin<::std::boxed::Box<dyn ::core::future::Future<Output = ()> + Send + 's>>).into())?
-                        },
-                        syn::ReturnType::Type(rarrow, ret_type) =>
-                        {
-                            parse(quote!(#rarrow ::std::pin::Pin<::std::boxed::Box<dyn ::core::future::Future<Output = #ret_type > + Send + 's>>).into())?
-                        },
-                    };
-
-                    method.sig.output = output;
-                }
+                crate::method_tools::unwrap_async_inplace(&mut *method)?;
             },
             _ => {},
         }
@@ -69,16 +41,17 @@ pub fn modify(item: &mut syn::ItemTrait) -> Result<TokenStream, syn::Error>
 
 fn generate_extras(item: &syn::ItemTrait) -> Result<TokenStream, syn::Error>
 {
+    let ident_span = item.ident.span();
     let type_traits_name = quote::format_ident!("{}TypeTraits", item.ident);
     let type_traits_method = crate::gen_traits::gen_entire_trait_method(item.ident.clone())?;
 
-    let type_traits_struct : syn::ItemStruct = parse(quote!(
+    let type_traits_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
         pub struct #type_traits_name
         {
         }
     ).into())?;
 
-    let type_traits_impl : syn::ItemImpl = parse(quote!(
+    let type_traits_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
         impl #type_traits_name
         {
             #type_traits_method
@@ -104,13 +77,14 @@ fn generate_extras(item: &syn::ItemTrait) -> Result<TokenStream, syn::Error>
         }
     }
 
-   let method_traits_name = quote::format_ident!("{}MethodTraits", item.ident);
-    let method_traits_struct : syn::ItemStruct = parse(quote!(
+    let method_traits_name = quote::format_ident!("{}MethodTraits", item.ident);
+    let method_traits_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
         pub struct #method_traits_name
         {
         }
     ).into())?;
-    let method_traits_impl : syn::ItemImpl = parse(quote!(
+
+    let method_traits_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
         impl #method_traits_name
         {
             #(#method_traits_vec)*
@@ -167,94 +141,7 @@ fn check_trait(item: &syn::ItemTrait) -> Result<(), syn::Error>
             },
             syn::TraitItem::Method(method) =>
             {
-                // Check it has no attributes and no body,
-                // not unsafe, ...
-
-                if !method.attrs.is_empty()
-                {
-                    error(method.sig.ident.span(), "component trait methods must have no attributes")?;
-                }
-
-                if method.default.is_some()
-                {
-                    error(method.sig.ident.span(), "component trait methods must have no default implementation")?;
-                }
-
-                if method.sig.constness.is_some()   
-                {
-                    error(method.sig.ident.span(), "component trait methods must not be const")?;
-                }
-
-                if method.sig.unsafety.is_some()
-                {
-                    error(method.sig.ident.span(), "component trait methods must not be unsafe")?;
-                }
-
-                if method.sig.abi.is_some()
-                {
-                    error(method.sig.ident.span(), "component trait methods must not have an ABI")?;
-                }
-
-                // Check there are no generics
-
-                if !method.sig.generics.params.is_empty()
-                    || method.sig.generics.where_clause.is_some()
-                {
-                    error(method.sig.ident.span(), "component trait methods can not have type or lifetime parameters")?;
-                }
-
-                // Check there is a receiver, it's by reference, and
-                // all parameters are by value
-
-                let mut got_receiver = false;
-
-                for input in method.sig.inputs.iter()
-                {
-                    match input
-                    {
-                        syn::FnArg::Receiver(receiver) =>
-                        {
-                            if got_receiver
-                            {
-                                error(receiver.self_token.span, "component trait method has two receivers")?;
-                            }
-
-                            got_receiver = true;
-
-                            if !receiver.attrs.is_empty()
-                            {
-                                error(method.sig.ident.span(), "component trait method cannot have attributes")?;
-                            }
-
-                            match &receiver.reference
-                            {
-                                Some((_, opt_lifetime)) =>
-                                {
-                                    if opt_lifetime.is_some()
-                                    {
-                                        error(method.sig.ident.span(), "component trait method receiver must not have a lifetime")?;
-                                    }
-                                },
-                                None =>
-                                {
-                                    error(method.sig.ident.span(), "component trait method receiver must be by reference")?;
-                                },
-                            }
-                        },
-                        syn::FnArg::Typed(pat) =>
-                        {
-                            if !pat.attrs.is_empty()
-                            {
-                                error(method.sig.ident.span(), "component trait method cannot have attributes")?;
-                            }
-                        },
-                    }
-                }
-
-                if !got_receiver
-                {
-                    error(method.sig.ident.span(), "component trait method must have a receiver")?;
-                }
+                let _ = crate::method_tools::check_trait_method(method, method_tools::MethodCheckKind::Method)?;
             },
             syn::TraitItem::Type(type_item) =>
             {

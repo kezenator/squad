@@ -7,9 +7,6 @@ edition = "2018"
 [dependencies.squad]
 path = "../squad"
 
-[dependencies.squad_codegen]
-path = "../squad_codegen"
-
 [dependencies.tokio]
 version = "=0.2.0-alpha.6"
 default-features = true

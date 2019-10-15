@@ -1,4 +1,7 @@
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
+
+pub use squad_codegen::component_trait;
+pub use squad_codegen::component_impl;
 
 pub struct MethodDescription
 {
@@ -12,14 +15,13 @@ pub struct MethodDescription
 pub struct Component<T: ?Sized>
 {
     value: Box<T>,
-    method: &'static MethodDescription,
 }
 
 impl<T: ?Sized> Component<T>
 {
-    pub fn new(value: Box<T>, method: &'static MethodDescription) -> Self
+    pub fn new(value: Box<T>, _method: &'static MethodDescription) -> Self
     {
-        return Component{value, method};
+        return Component{value};
     }
 }
 
@@ -28,5 +30,11 @@ impl<T: ?Sized> Deref for Component<T> {
 
     fn deref(&self) -> &T {
         &self.value
+    }
+}
+
+impl<T: ?Sized> DerefMut for Component<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
     }
 }

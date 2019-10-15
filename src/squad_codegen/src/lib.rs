@@ -5,14 +5,25 @@ extern crate syn;
 
 mod error;
 mod gen_traits;
+mod method_tools;
 mod mod_trait;
-
-use quote::quote;
+mod mod_impl;
 
 #[proc_macro_attribute]
-pub fn component(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream
+pub fn component_trait(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream
 {
-    let result = do_it(input);
+    return run(mod_trait::process_trait, input)
+}
+
+#[proc_macro]
+pub fn component_impl(input: proc_macro::TokenStream) -> proc_macro::TokenStream
+{
+    return run(mod_impl::process_impl, input)
+}
+
+fn run<F: FnOnce(proc_macro::TokenStream) -> Result<proc_macro2::TokenStream, syn::Error>>(process: F, input: proc_macro::TokenStream) -> proc_macro::TokenStream
+{
+    let result = process(input);
 
     let proc2_token_stream = match result
     {
@@ -22,18 +33,9 @@ pub fn component(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream)
 
     let result_stream = proc_macro::TokenStream::from(proc2_token_stream);
 
-    println!();
-    println!("{}", result_stream.to_string());
-    println!();
+    //println!();
+    //println!("{}", result_stream.to_string());
+    //println!();
 
     return result_stream;
-}
-
-fn do_it(input: proc_macro::TokenStream) -> Result<proc_macro2::TokenStream, syn::Error>
-{
-    let mut item : syn::ItemTrait = syn::parse(input)?;
-
-    let extras = mod_trait::modify(&mut item)?;
-
-    return Ok(quote!(#item #extras));
 }

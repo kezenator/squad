@@ -1,5 +1,5 @@
-use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use proc_macro2::TokenStream;
+use quote::quote_spanned;
 
 pub fn gen_entire_trait_method(
     trait_ident: syn::Ident,
@@ -7,9 +7,11 @@ pub fn gen_entire_trait_method(
 {
     let mut stream = TokenStream::new();
 
+    let trait_ident_span = trait_ident.span();
+
     let trait_literal = syn::LitStr::new(&trait_ident.to_string(), trait_ident.span());
 
-    stream.extend(quote!(
+    stream.extend(quote_spanned!(trait_ident_span=>
         pub fn trait_description () -> &'static ::squad::MethodDescription
         {
             use ::tracing::{callsite, subscriber::Interest, Metadata, __macro_support::*};
@@ -28,6 +30,7 @@ pub fn gen_entire_trait_method(
             static REGISTRATION: Once = Once::new();
             impl MyCallsite {
                 #[inline]
+                #[allow(dead_code)]
                 fn interest(&self) -> Interest {
                     match INTEREST.load(Ordering::Relaxed) {
                         0 => Interest::never(),
@@ -77,10 +80,12 @@ pub fn gen_trait_method_method(
 {
     let mut stream = TokenStream::new();
 
+    let trait_ident_span = trait_ident.span();
+
     let trait_literal = syn::LitStr::new(&trait_ident.to_string(), trait_ident.span());
     let method_literal = syn::LitStr::new(&method_ident.to_string(), method_ident.span());
 
-    stream.extend(quote!(
+    stream.extend(quote_spanned!(trait_ident_span=>
         pub fn #method_ident () -> &'static ::squad::MethodDescription
         {
             use ::tracing::{callsite, subscriber::Interest, Metadata, __macro_support::*};
@@ -99,6 +104,7 @@ pub fn gen_trait_method_method(
             static REGISTRATION: Once = Once::new();
             impl MyCallsite {
                 #[inline]
+                #[allow(dead_code)]
                 fn interest(&self) -> Interest {
                     match INTEREST.load(Ordering::Relaxed) {
                         0 => Interest::never(),
