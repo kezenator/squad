@@ -1,67 +1,105 @@
 use tracing::{Event, Id, Metadata, Subscriber};
+use tracing_core::span::Current;
 use tracing::span::{Record, Attributes};
-use std::fmt::Write;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug)]
+pub struct ValueOutput
+{
+    name: &'static str,
+    value: String,
+}
+
+pub struct SpanOutput
+{
+    pub id: u64,
+    pub metadata: &'static tracing::Metadata<'static>,
+    pub values: Vec<ValueOutput>,
+    pub contents: Vec<ActionOutput>,
+}
+
+#[derive(Clone)]
+pub struct EventOutput
+{
+    pub metadata: &'static tracing::Metadata<'static>,
+    pub values: Vec<ValueOutput>,
+}
+
+#[derive(Clone)]
+pub struct RecordOutput
+{
+    pub values: Vec<ValueOutput>,
+}
+
+#[derive(Clone)]
+pub enum ActionOutput
+{
+    Span(Arc<Mutex<SpanOutput>>),
+    Record(RecordOutput),
+    Event(EventOutput),
+}
+
+pub enum RootOutput
+{
+    Span(Arc<Mutex<SpanOutput>>),
+    Event(EventOutput),
+}
 
 std::thread_local!{
-    static CUR_SPAN: std::cell::RefCell<Option<u64>> = std::cell::RefCell::new(None);
+    static CUR_SPAN: RefCell<Option<u64>> = RefCell::new(None);
 }
 
-struct StringVisitor<'a>
+struct VecValueOutputVisitor
 {
-    dest: &'a mut String,
-    first: bool,
+    result: Option<Vec<ValueOutput>>,
 }
 
-impl<'a> StringVisitor<'a>
+impl VecValueOutputVisitor
 {
-    fn new(dest: &'a mut String) -> Self
+    fn new() -> Self
     {
-        dest.push('{');
-        return StringVisitor{dest, first: true};
+        VecValueOutputVisitor{ result: Some(Vec::new()) }
+    }
+
+    fn take(&mut self) -> Vec<ValueOutput>
+    {
+        self.result.take().unwrap()
     }
 }
 
-impl<'a> std::ops::Drop for StringVisitor<'a>
-{
-    fn drop(&mut self)
-    {
-        self.dest.push('}');
-    }
-}
-
-impl<'a> tracing::field::Visit for StringVisitor<'a>
+impl tracing::field::Visit for VecValueOutputVisitor
 {
     fn record_debug(&mut self, field: &tracing::field::Field, value: & dyn std::fmt::Debug)
     {
-        if self.first == true
+        if let Some(result) = &mut self.result
         {
-            self.first = false;
+            result.push(
+                ValueOutput{
+                    name: field.name(),
+                    value: format!("{:?}", value),
+                });
         }
-        else
-        {
-            self.dest.push_str(", ");
-        }
-
-        write!(self.dest, "{} = {:?}", field.name(), value).unwrap();
     }
 }
 
-struct SpanRecord
+struct OpenSpanDetails
 {
     ref_count: usize,
+    is_root: bool,
     cur_stack: Vec<u64>,
-    value: String,
+    output: Arc<Mutex<SpanOutput>>,
 }
 
 struct SharedState
 {
     counter: u64,
-    map: std::collections::HashMap<u64, SpanRecord>,
+    map: std::collections::HashMap<u64, OpenSpanDetails>,
 }
 
 impl SharedState
 {
-    fn get_record(&mut self, id: &Id) -> &mut SpanRecord
+    fn get_record(&mut self, id: &Id) -> &mut OpenSpanDetails
     {
         let index = id.into_u64();
         return self.map.get_mut(&index).unwrap();
@@ -84,6 +122,45 @@ impl MySubscriber
                     map: std::collections::HashMap::new(),
                 })
         };
+    }
+
+    fn output(&self, output: RootOutput)
+    {
+        let mut prefix = String::new();
+        match output
+        {
+            RootOutput::Event(event) => self.output_prefixed(&mut prefix, ActionOutput::Event(event)),
+            RootOutput::Span(span) => self.output_prefixed(&mut prefix, ActionOutput::Span(span)),
+        }
+    }
+
+    fn output_prefixed(&self, prefix: &mut String, action: ActionOutput)
+    {
+        match action
+        {
+            ActionOutput::Span(span_arc_mutex) =>
+            {
+                let span = span_arc_mutex.lock().unwrap();
+                println!("{}===== {} =====", prefix, span.id);
+                prefix.push_str(" | ");
+                self.output_prefixed(prefix, ActionOutput::Record(RecordOutput{ values: span.values.clone()}));
+                for sub_action in span.contents.iter()
+                {
+                    self.output_prefixed(prefix, sub_action.clone());
+                }
+                prefix.pop();
+                prefix.pop();
+                prefix.pop();
+            },
+            ActionOutput::Event(event) =>
+            {
+                println!("{}Event: {:?}", prefix, event.values);
+            },
+            ActionOutput::Record(record) =>
+            {
+                println!("{}Record: {:?}", prefix, record.values);
+            },
+        }
     }
 }
 
@@ -117,31 +194,58 @@ impl Subscriber for MySubscriber
     {
         let mut state = self.mutex.lock().unwrap();
 
+        // Create a new ID for this span
+
         let result = state.counter;
         state.counter += 1;
 
-        let mut value = String::new();
-        value.push_str(&format!("===== {} =====\n", result));
-        value.push_str(&format!("{:?}\n", attributes));
-        value.push_str(&format!("{}/{}: {}\n", attributes.metadata().target(), attributes.metadata().name(), attributes.values()));
+        // Collect up the values
 
-        state.map.insert(result, SpanRecord{ref_count: 1, cur_stack: Vec::new(), value: value});
+        let mut visitor = VecValueOutputVisitor::new();
+        attributes.record(&mut visitor);
+
+        // Create a new SpanOutput for the results
+
+        let span_output = Arc::new(Mutex::new(SpanOutput
+            {
+                id: result,
+                metadata: attributes.metadata(),
+                values: visitor.take(),
+                contents: Vec::new(),
+            }));
+
+        // If there's a parent, then add this
+        // span to it's set of actions
+
+        if let Some(parent_id) = attributes.parent()
+        {
+            let parent_record = state.get_record(&parent_id);
+            parent_record.output.lock().unwrap().contents.push(ActionOutput::Span(span_output.clone()));
+        }
+
+        // Finally, insert this span into the
+        // map of active spans
+
+        state.map.insert(
+            result,
+            OpenSpanDetails{
+                ref_count: 1,
+                is_root: attributes.parent().is_none(),
+                cur_stack: Vec::new(),
+                output: span_output,
+            });
 
         return Id::from_u64(result);
     }
 
     fn record(&self, id: &Id, traced_record: &Record)
     {
-        let mut record_string_val = "Record: ".to_string();
-        {
-            let mut visitor = StringVisitor::new(&mut record_string_val);
-            traced_record.record(&mut visitor);
-        }
-        record_string_val.push('\n');
+        let mut visitor = VecValueOutputVisitor::new();
+        traced_record.record(&mut visitor);
 
         let mut state = self.mutex.lock().unwrap();
         let record = state.get_record(id);
-        record.value.push_str(&record_string_val);
+        record.output.lock().unwrap().contents.push(ActionOutput::Record(RecordOutput{values: visitor.take()}));
     }
 
     fn record_follows_from(&self, _id: &Id, _from: &Id)
@@ -150,12 +254,11 @@ impl Subscriber for MySubscriber
 
     fn event(&self, event: &Event)
     {
-        let mut event_string_val = format!("Event: {}/{}: ", event.metadata().target(), event.metadata().name());
-        {
-            let mut visitor = StringVisitor::new(&mut event_string_val);
+        let values = {
+            let mut visitor = VecValueOutputVisitor::new();
             event.record(&mut visitor);
-        }
-        event_string_val.push('\n');
+            visitor.take()
+        };
 
         CUR_SPAN.with(|cur| {
             match *cur.borrow()
@@ -164,12 +267,11 @@ impl Subscriber for MySubscriber
                 {
                     let mut state = self.mutex.lock().unwrap();
                     let record = state.get_record(&Id::from_u64(index));
-                    record.value.push_str(&event_string_val);
+                    record.output.lock().unwrap().contents.push(ActionOutput::Event(EventOutput{metadata: event.metadata(), values}));
                 },
                 None =>
                 {
-                    println!("===== Event with no parent =====");
-                    println!("{}", event_string_val);
+                    self.output(RootOutput::Event(EventOutput{metadata: event.metadata(), values}));
                 },
             }
         });
@@ -203,17 +305,18 @@ impl Subscriber for MySubscriber
                 *cur.borrow_mut() = record.cur_stack.pop();
             });
 
-            if record.ref_count == 0
-            {
-                println!("{}", record.value);
-            }
-
             record.ref_count
         };
 
         if final_ref_count == 0
         {
-            state.map.remove(&id.into_u64());
+            if let Some(open_span_details) = state.map.remove(&id.into_u64())
+            {
+                if open_span_details.is_root
+                {
+                    self.output(RootOutput::Span(open_span_details.output));
+                }
+            }
         }
     }
 
@@ -225,17 +328,18 @@ impl Subscriber for MySubscriber
             let mut record = state.get_record(&id);
             record.ref_count -= 1;
 
-            if record.ref_count == 0
-            {
-                println!("{}", record.value);
-            }
-
             record.ref_count
         };
 
         if final_ref_count == 0
         {
-            state.map.remove(&id.into_u64());
+            if let Some(open_span_details) = state.map.remove(&id.into_u64())
+            {
+                if open_span_details.is_root
+                {
+                    self.output(RootOutput::Span(open_span_details.output));
+                }
+            }
         }
 
         return final_ref_count == 0;
@@ -248,5 +352,21 @@ impl Subscriber for MySubscriber
         record.ref_count += 1;
         return id.clone();
     }
-}
 
+    fn current_span(&self) -> Current
+    {
+        let mut state = self.mutex.lock().unwrap();
+        CUR_SPAN.with(|cur| {
+            match *cur.borrow()
+            {
+                Some(index) =>
+                {
+                    let id = Id::from_u64(index);
+                    let record = state.get_record(&id);
+                    Current::new(id, record.output.lock().unwrap().metadata)
+                },
+                None => Current::none(),
+            }
+        })
+    }
+}

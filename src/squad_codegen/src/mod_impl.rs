@@ -241,12 +241,11 @@ fn trait_methods(data: &Impl) -> Result<proc_macro2::TokenStream, syn::Error>
                                 let __trait_method_span = ::tracing::Span::child_of(
                                     __trait_span.id(),
                                     __trait_method_meta,
-                                    &::tracing::valueset!(__trait_method_meta.fields(), ));
+                                    &::tracing::valueset!(
+                                        __trait_method_meta.fields(),
+                                        #(#non_receiver_names = #non_receiver_names),*
+                                    ));
                                 let __trait_method_enter = __trait_method_span.enter();
-
-                                #(
-                                    __trait_method_span.record(stringify!(#non_receiver_names), &::tracing_core::field::debug(&#non_receiver_names));
-                                )*
 
                                 let __result = #self_ident.value.#method_ident(#(#non_receiver_names),*).await;
 
