@@ -33,18 +33,18 @@ impl SimpleHelloImpl
 
     async fn say_hello(&self)
     {
-        println!("Hello World!");
+        tracing::debug!(message="Hello World!");
     }
 
     async fn input(&mut self, val: u32)
     {
-        println!("Input {}", val);
+        tracing::debug!(input = val);
         self.state.val = val;
     }
 
     async fn output(&self) -> u32
     {
-        println!("Outputting {}", self.state.val);
+        tracing::debug!(output = self.state.val);
         return self.state.val;
     }
 }

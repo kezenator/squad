@@ -160,18 +160,20 @@ fn custom_methods(data: &Impl) -> Result<proc_macro2::TokenStream, syn::Error>
                 let method_ident_span = method_ident.span();
                 let trait_path = &data.trait_path;
                 let impl_impl_ident = syn::Ident::new(&format!("{}Impl", data.ident.to_string()), data.ident.span());
-                let trait_traits_path = convert_trait_path(&data.trait_path, "TypeTraits");
+                let trait_description_path = convert_trait_path(&data.trait_path, "TraitDescription");
 
                 stream.extend(quote_spanned!(method_ident_span=>
                     #method_vis fn #method_ident() -> ::squad::Component<dyn #trait_path>
                     {
-                        let impl_ptr = Box::new(#impl_ident{ 
-                            value: #impl_impl_ident::#method_ident(),
-                        });
+                        let impl_ptr = Box::new(
+                            #impl_ident
+                            { 
+                                value: #impl_impl_ident::#method_ident(),
+                            });
 
                         return ::squad::Component::<dyn #trait_path>::new(
                             impl_ptr,
-                            #trait_traits_path::trait_description());
+                            #trait_description_path::trait_description());
                     }
                 ));
             },
@@ -211,7 +213,8 @@ fn trait_methods(data: &Impl) -> Result<proc_macro2::TokenStream, syn::Error>
                     let method_ident = &method.def.sig.ident;
                     let method_ident_span = method_ident.span();
                     let method_output = &method.def.sig.output;
-                    let trait_methods_path = convert_trait_path(&data.trait_path, "MethodTraits");
+                    let trait_descriptions_path = convert_trait_path(&data.trait_path, "TraitDescription");
+                    let method_descriptions_path = convert_trait_path(&data.trait_path, "MethodDescriptions");
 
                     let receiver = method_tools::get_receiver(&method.def)?;
 
@@ -227,14 +230,29 @@ fn trait_methods(data: &Impl) -> Result<proc_macro2::TokenStream, syn::Error>
                         {
                             async fn #method_ident(#self_ident: & #self_mut #impl_ident, #(#non_receiver_args),*) #method_output {
 
-                                let __meta = #trait_methods_path :: #method_ident().callsite_metadata;
-                                let __span = ::tracing::Span::child_of(
+                                let __trait_meta = #trait_descriptions_path :: trait_description().metadata;
+                                let __trait_span = ::tracing::Span::child_of(
                                     ::tracing::Span::current(),
-                                    __meta,
-                                    &::tracing::valueset!(__meta.fields(), ));
-                                let __enter = __span.enter();
+                                    __trait_meta,
+                                    &::tracing::valueset!(__trait_meta.fields(), ));
+                                let __trait_enter = __trait_span.enter();
 
-                                #self_ident.value.#method_ident(#(#non_receiver_names),*).await
+                                let __trait_method_meta = #method_descriptions_path :: #method_ident().metadata;
+                                let __trait_method_span = ::tracing::Span::child_of(
+                                    __trait_span.id(),
+                                    __trait_method_meta,
+                                    &::tracing::valueset!(__trait_method_meta.fields(), ));
+                                let __trait_method_enter = __trait_method_span.enter();
+
+                                #(
+                                    __trait_method_span.record(stringify!(#non_receiver_names), &::tracing_core::field::debug(&#non_receiver_names));
+                                )*
+
+                                let __result = #self_ident.value.#method_ident(#(#non_receiver_names),*).await;
+
+                                __trait_method_span.record("return", &::tracing_core::field::debug(&__result));
+
+                                return __result;
                             }
 
                             Box::pin(#method_ident(self, #(#non_receiver_names),*))

@@ -42,23 +42,23 @@ pub fn modify(item: &mut syn::ItemTrait) -> Result<TokenStream, syn::Error>
 fn generate_extras(item: &syn::ItemTrait) -> Result<TokenStream, syn::Error>
 {
     let ident_span = item.ident.span();
-    let type_traits_name = quote::format_ident!("{}TypeTraits", item.ident);
-    let type_traits_method = crate::gen_traits::gen_entire_trait_method(item.ident.clone())?;
+    let type_descriptions_name = quote::format_ident!("{}TraitDescription", item.ident);
+    let type_descriptions_method = crate::gen_traits::gen_entire_trait_method(item.ident.clone())?;
 
-    let type_traits_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
-        pub struct #type_traits_name
+    let type_descriptions_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
+        pub struct #type_descriptions_name
         {
         }
     ).into())?;
 
-    let type_traits_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
-        impl #type_traits_name
+    let type_descriptions_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
+        impl #type_descriptions_name
         {
-            #type_traits_method
+            #type_descriptions_method
         }
     ).into())?;
 
-    let mut method_traits_vec : Vec<syn::ImplItemMethod> = Vec::new();
+    let mut method_descriptions_vec : Vec<syn::ImplItemMethod> = Vec::new();
 
     for member in item.items.iter()
     {
@@ -66,10 +66,10 @@ fn generate_extras(item: &syn::ItemTrait) -> Result<TokenStream, syn::Error>
         {
             syn::TraitItem::Method(method) =>
             {
-                method_traits_vec.push(
+                method_descriptions_vec.push(
                     crate::gen_traits::gen_trait_method_method(
                         item.ident.clone(),
-                        method.sig.ident.clone(),
+                        &method,
                     )?
                 );
             },
@@ -77,25 +77,25 @@ fn generate_extras(item: &syn::ItemTrait) -> Result<TokenStream, syn::Error>
         }
     }
 
-    let method_traits_name = quote::format_ident!("{}MethodTraits", item.ident);
-    let method_traits_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
-        pub struct #method_traits_name
+    let method_descriptions_name = quote::format_ident!("{}MethodDescriptions", item.ident);
+    let method_descriptions_struct : syn::ItemStruct = parse(quote_spanned!(ident_span=>
+        pub struct #method_descriptions_name
         {
         }
     ).into())?;
 
-    let method_traits_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
-        impl #method_traits_name
+    let method_descriptions_impl : syn::ItemImpl = parse(quote_spanned!(ident_span=>
+        impl #method_descriptions_name
         {
-            #(#method_traits_vec)*
+            #(#method_descriptions_vec)*
         }
     ).into())?;
 
     return Ok(quote!(
-        #type_traits_struct
-        #type_traits_impl
-        #method_traits_struct
-        #method_traits_impl
+        #type_descriptions_struct
+        #type_descriptions_impl
+        #method_descriptions_struct
+        #method_descriptions_impl
     ));
 }
 

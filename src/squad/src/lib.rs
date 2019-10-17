@@ -3,13 +3,19 @@ use std::ops::{Deref, DerefMut};
 pub use squad_codegen::component_trait;
 pub use squad_codegen::component_impl;
 
+pub struct TraitDescription
+{
+    pub module_path: &'static str,
+    pub trait_name: &'static str,
+    pub metadata: &'static ::tracing_core::Metadata<'static>,
+}
+
 pub struct MethodDescription
 {
-    pub crate_name: &'static str,
     pub module_path: &'static str,
     pub trait_name: &'static str,
     pub method_name: &'static str,
-    pub callsite_metadata: &'static ::tracing_core::Metadata<'static>,
+    pub metadata: &'static ::tracing_core::Metadata<'static>,
 }
 
 pub struct Component<T: ?Sized>
@@ -19,7 +25,9 @@ pub struct Component<T: ?Sized>
 
 impl<T: ?Sized> Component<T>
 {
-    pub fn new(value: Box<T>, _method: &'static MethodDescription) -> Self
+    pub fn new(
+        value: Box<T>,
+        _trait_description: &'static TraitDescription) -> Self
     {
         return Component{value};
     }

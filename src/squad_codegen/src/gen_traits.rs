@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote_spanned;
+use crate::method_tools;
 
 pub fn gen_entire_trait_method(
     trait_ident: syn::Ident,
@@ -12,7 +13,7 @@ pub fn gen_entire_trait_method(
     let trait_literal = syn::LitStr::new(&trait_ident.to_string(), trait_ident.span());
 
     stream.extend(quote_spanned!(trait_ident_span=>
-        pub fn trait_description () -> &'static ::squad::MethodDescription
+        pub fn trait_description () -> &'static ::squad::TraitDescription
         {
             use ::tracing::{callsite, subscriber::Interest, Metadata, __macro_support::*};
             struct MyCallsite;
@@ -54,19 +55,17 @@ pub fn gen_entire_trait_method(
                 }
             }
 
-            static METHOD_DESCRIPTION: ::squad::MethodDescription = ::squad::MethodDescription {
-                crate_name: env!("CARGO_PKG_NAME"),
+            static TRAIT_DESCRIPTION: ::squad::TraitDescription = ::squad::TraitDescription {
                 module_path: module_path!(),
                 trait_name: #trait_literal,
-                method_name: #trait_literal,
-                callsite_metadata: &META,
+                metadata: &META,
             };
 
             REGISTRATION.call_once(|| {
                 callsite::register(&MyCallsite);
             });
 
-            &METHOD_DESCRIPTION
+            &TRAIT_DESCRIPTION
         }
     ));
 
@@ -75,15 +74,19 @@ pub fn gen_entire_trait_method(
 
 pub fn gen_trait_method_method(
     trait_ident: syn::Ident,
-    method_ident: syn::Ident
+    method: &syn::TraitItemMethod
 ) -> Result<syn::ImplItemMethod, syn::Error>
 {
     let mut stream = TokenStream::new();
+
+    let method_ident = &method.sig.ident;
 
     let trait_ident_span = trait_ident.span();
 
     let trait_literal = syn::LitStr::new(&trait_ident.to_string(), trait_ident.span());
     let method_literal = syn::LitStr::new(&method_ident.to_string(), method_ident.span());
+
+    let non_receiver_argument_idents = method_tools::get_non_receiver_idents(method)?;
 
     stream.extend(quote_spanned!(trait_ident_span=>
         pub fn #method_ident () -> &'static ::squad::MethodDescription
@@ -95,7 +98,7 @@ pub fn gen_trait_method_method(
                     name: concat!(module_path!(), "::", #trait_literal, "::", #method_literal),
                     target: concat!(#trait_literal, "::", #method_literal),
                     level: ::tracing::Level::DEBUG,
-                    fields: ::tracing::fieldset!(),
+                    fields: ::tracing::fieldset!( #(#non_receiver_argument_idents ,)* return),
                     callsite: &MyCallsite,
                     kind: ::tracing_core::Kind::SPAN,
                 }
@@ -129,11 +132,10 @@ pub fn gen_trait_method_method(
             }
 
             static METHOD_DESCRIPTION: ::squad::MethodDescription = ::squad::MethodDescription {
-                crate_name: env!("CARGO_PKG_NAME"),
                 module_path: module_path!(),
                 trait_name: #trait_literal,
                 method_name: #method_literal,
-                callsite_metadata: &META,
+                metadata: &META,
             };
 
             REGISTRATION.call_once(|| {
